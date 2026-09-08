@@ -383,7 +383,7 @@ func (h *Handler) setupExecution(ctx context.Context, query *arkv1alpha1.Query, 
 	}
 
 	var eventStream EventStreamInterface
-	if !isSubTarget {
+	if !isSubTarget && IsStreamingEnabled(*query) {
 		var err error
 		eventStream, err = NewEventStreamForQuery(ctx, h.k8sClient, query.Namespace, sessionId, query.Name)
 		if err != nil {
