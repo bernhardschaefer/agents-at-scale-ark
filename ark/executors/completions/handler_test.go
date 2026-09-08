@@ -16,6 +16,7 @@ import (
 	"github.com/openai/openai-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,6 +28,7 @@ import (
 	arkv1alpha1 "mckinsey.com/ark/api/v1alpha1"
 	arkv1prealpha1 "mckinsey.com/ark/api/v1prealpha1"
 	arka2a "mckinsey.com/ark/internal/a2a"
+	"mckinsey.com/ark/internal/annotations"
 	eventingnoop "mckinsey.com/ark/internal/eventing/noop"
 	telemetrynoop "mckinsey.com/ark/internal/telemetry/noop"
 )
@@ -236,6 +238,7 @@ func TestA2AMultiArtifactSerializationDivergence(t *testing.T) {
 
 func newTestScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
 	_ = arkv1alpha1.AddToScheme(scheme)
 	_ = arkv1prealpha1.AddToScheme(scheme)
 	return scheme
@@ -1811,6 +1814,70 @@ func TestSetupExecutionSubTarget(t *testing.T) {
 		require.Len(t, state.inputMessages, 1)
 		assert.Equal(t, "the original question posed to the team", state.inputMessages[0].OfUser.Content.OfString.Value)
 	})
+}
+
+func TestInitializeExecution_DoesNotCreateEventStreamWithoutQueryOptIn(t *testing.T) {
+	query := &arkv1alpha1.Query{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-query", Namespace: "default"},
+		Spec: arkv1alpha1.QuerySpec{
+			Target: &arkv1alpha1.QueryTarget{Type: "agent", Name: "test-agent"},
+			Input:  runtime.RawExtension{Raw: []byte(`"hello"`)},
+		},
+	}
+	streamingConfig := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "ark-config-streaming", Namespace: "default"},
+		Data: map[string]string{
+			"enabled":    TrueString,
+			"serviceRef": "name: ark-broker",
+		},
+	}
+	streamingService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "ark-broker", Namespace: "default"},
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{{Port: 80}},
+		},
+	}
+	h := newTestHandler(query, streamingConfig, streamingService)
+
+	_, state, err := h.setupExecution(context.Background(), query, query.Spec.Target, "", "")
+
+	require.NoError(t, err)
+	require.Nil(t, state.eventStream)
+}
+
+func TestInitializeExecution_CreatesEventStreamWithQueryOptIn(t *testing.T) {
+	query := &arkv1alpha1.Query{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-query",
+			Namespace: "default",
+			Annotations: map[string]string{
+				annotations.StreamingEnabled: TrueString,
+			},
+		},
+		Spec: arkv1alpha1.QuerySpec{
+			Target: &arkv1alpha1.QueryTarget{Type: "agent", Name: "test-agent"},
+			Input:  runtime.RawExtension{Raw: []byte(`"hello"`)},
+		},
+	}
+	streamingConfig := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "ark-config-streaming", Namespace: "default"},
+		Data: map[string]string{
+			"enabled":    TrueString,
+			"serviceRef": "name: ark-broker",
+		},
+	}
+	streamingService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "ark-broker", Namespace: "default"},
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{{Port: 80}},
+		},
+	}
+	h := newTestHandler(query, streamingConfig, streamingService)
+
+	_, state, err := h.setupExecution(context.Background(), query, query.Spec.Target, "", "")
+
+	require.NoError(t, err)
+	require.NotNil(t, state.eventStream)
 }
 
 func TestSubTargetDoesNotWriteParentMemory(t *testing.T) {
