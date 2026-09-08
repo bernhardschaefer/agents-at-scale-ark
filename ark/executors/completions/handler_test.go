@@ -1900,15 +1900,34 @@ func TestSubTargetDoesNotWriteParentMemory(t *testing.T) {
 
 func TestSetupExecutionSubTargetIsolation(t *testing.T) {
 	query := &arkv1alpha1.Query{
-		ObjectMeta: metav1.ObjectMeta{Name: "team-query", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-query",
+			Namespace: "default",
+			Annotations: map[string]string{
+				annotations.StreamingEnabled: TrueString,
+			},
+		},
 		Spec: arkv1alpha1.QuerySpec{
 			Target: &arkv1alpha1.QueryTarget{Type: "team", Name: "my-team"},
 			Input:  runtime.RawExtension{Raw: []byte(`"question"`)},
 		},
 	}
 	target := &arkv1alpha1.QueryTarget{Type: "agent", Name: "member-b"}
+	streamingConfig := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "ark-config-streaming", Namespace: "default"},
+		Data: map[string]string{
+			"enabled":    TrueString,
+			"serviceRef": "name: ark-broker",
+		},
+	}
+	streamingService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "ark-broker", Namespace: "default"},
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{{Port: 80}},
+		},
+	}
 
-	h := newTestHandler(query)
+	h := newTestHandler(query, streamingConfig, streamingService)
 	ctx := WithSubTargetAgent(context.Background(), "member-b")
 
 	_, state, err := h.setupExecution(ctx, query, target, "conv-1", "inbound text")
